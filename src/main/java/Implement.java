@@ -18,6 +18,7 @@ public class Implement<T> implements ReflectionJdvcDao<T> {
     private static final String password = "12345678";
     private static final String URL = "jdbc:postgresql://localhost:5432/postgres";
     private Class targetClass;
+    private List<Field> classFields;
     private String tableName;
     Properties connectionProps = new Properties();
 
@@ -26,20 +27,26 @@ public class Implement<T> implements ReflectionJdvcDao<T> {
         connectionProps.put("user", userName);
         connectionProps.put("password", password);
         tableName = getTableName(targetClass);
+        classFields = Arrays.asList(targetClass.getFields());
     }
 
 
     @Override
     public void insert(T object) {
-        Class c = object.getClass();
         Connection connection = null;
         PreparedStatement p = null;
-        ResultSet resultSet = null;
-        InsertMerged insertMerged = mergeInsertParams(getFieldSet(object, Arrays.asList(c.getFields())));
+        InsertMerged insertMerged = mergeInsertParams(getFieldSet(object, classFields));
+        boolean isExist = true;
+        try{
+            selectByKey(object);
+        }catch (Exception e){
+            isExist = false;
+        }
+        if (isExist) throw new RuntimeException("Запись с таким ключом уже существует");
         try {
             connection = DriverManager.getConnection(URL, connectionProps);
             String s = "insert into " + tableName + insertMerged.fields + " values " + insertMerged.params;
-            log.info("SQL " + s);
+            log.info("SQl " + s);
             p = connection.prepareStatement(s);
             List<Object> list = insertMerged.paramsValues;
             for (int i = 0; i < list.size(); i++) {
@@ -47,74 +54,77 @@ public class Implement<T> implements ReflectionJdvcDao<T> {
             }
             p.execute();
         } catch (SQLException e) {
-            e.printStackTrace();
+            throw new RuntimeException(e);
+        } finally {
+            closeConnections(connection, p);
         }
     }
 
     @Override
     public void update(T object) {
-        deleteByKey(object);
-        selectByKey(object);
+        Connection connection = null;
+        PreparedStatement p = null;
+        HashMap<String,Object> objectFields = getFieldSet(object, classFields);
+        HashMap<String, Object> keyFields = getKeySet(object, classFields);
+        Map.Entry<String, List<Object>> mergedKey = mergeParams(keyFields," and ");
+        Map.Entry<String,List<Object>> mergedFields = mergeParams(objectFields," , ");
+        try {
+            connection = DriverManager.getConnection(URL, connectionProps);
+            String sql = " update " + tableName + " set " + mergedFields.getKey() + " where " + mergedKey.getKey();
+            p = connection.prepareStatement(sql);
+            for (int i = 0; i <mergedFields.getValue().size(); i++){
+                p.setObject(i+1, mergedFields.getValue().get(i));
+            }
+            for (int i = 0; i <mergedKey.getValue().size(); i++){
+                p.setObject(i+mergedFields.getValue().size() + 1, mergedKey.getValue().get(i));
+            }
+            p.execute();
+        } catch (SQLException e) {
+            throw new RuntimeException(e);
+        }finally {
+            closeConnections(connection,p);
+        }
     }
 
     @Override
     public void deleteByKey(T key) {
-        {
-            Class c = key.getClass();
-            HashMap<String, Object> fields = getKeySet(key, Arrays.asList(c.getDeclaredFields()));
-            Connection connection = null;
-            PreparedStatement p = null;
-            ResultSet resultSet = null;
-            try {
-                connection = DriverManager.getConnection(URL, connectionProps);
-                Map.Entry<String, List<Object>> merged = mergeParams(fields);
-                p = connection.prepareStatement("delete from " + tableName + " where " + merged.getKey());
-                for (int i = 0; i < merged.getValue().size(); i++) {
-                    p.setObject(i + 1, merged.getValue().get(i));
-                }
-                p.execute();
-                return;
-            } catch (SQLException e) {
-                throw new RuntimeException(e);
-            } finally {
-                try {
-                    if (resultSet != null) resultSet.close();
-                    if (p != null) p.close();
-                    if (connection != null) connection.close();
-                } catch (SQLException e) {
-                    e.printStackTrace();
-                }
+        HashMap<String, Object> fields = getKeySet(key, classFields);
+        Connection connection = null;
+        PreparedStatement p = null;
+        try {
+            connection = DriverManager.getConnection(URL, connectionProps);
+            Map.Entry<String, List<Object>> merged = mergeParams(fields," and ");
+            p = connection.prepareStatement("delete from " + tableName + " where " + merged.getKey());
+            for (int i = 0; i < merged.getValue().size(); i++) {
+                p.setObject(i + 1, merged.getValue().get(i));
             }
+            p.execute();
+        } catch (SQLException e) {
+            throw new RuntimeException(e);
+        } finally {
+            closeConnections(connection, p);
         }
-
     }
 
     @Override
     public T selectByKey(T key) {
-        Class c = key.getClass();
-        HashMap<String, Object> fields = getKeySet(key, Arrays.asList(c.getDeclaredFields()));
+        HashMap<String, Object> fields = getKeySet(key, classFields);
         Connection connection = null;
         PreparedStatement p = null;
         ResultSet resultSet = null;
         try {
             connection = DriverManager.getConnection("jdbc:postgresql://localhost:5432/postgres", connectionProps);
-            Map.Entry<String, List<Object>> merged = mergeParams(fields);
+            Map.Entry<String, List<Object>> merged = mergeParams(fields, " and ");
             p = connection.prepareStatement("select * from " + tableName + " where " + merged.getKey());
             for (int i = 0; i < merged.getValue().size(); i++) {
                 p.setObject(i + 1, merged.getValue().get(i));
             }
             resultSet = p.executeQuery();
-            return transformSQLtoObject(key.getClass(), resultSet);
+            return transformSQLtoObject(resultSet);
         } catch (SQLException e) {
             throw new RuntimeException(e);
         } finally {
-            try {
-                if (resultSet != null) resultSet.close();
-                if (p != null) p.close();
-                if (connection != null) connection.close();
-            } catch (SQLException e) {
-                e.printStackTrace();
-            }
+            closeConnections(connection, p, resultSet);
         }
     }
 
@@ -132,13 +142,7 @@ public class Implement<T> implements ReflectionJdvcDao<T> {
         } catch (SQLException e) {
             throw new RuntimeException("SQl error", e);
         } finally {
-            try {
-                if (resultSet != null) resultSet.close();
-                if (p != null) p.close();
-                if (connection != null) connection.close();
-            } catch (SQLException e) {
-                e.printStackTrace();
-            }
+            closeConnections(connection, p, resultSet);
         }
     }
 
@@ -173,6 +177,25 @@ public class Implement<T> implements ReflectionJdvcDao<T> {
         return result;
     }
 
+    private void closeConnections(Connection c, PreparedStatement p) {
+        try {
+            if (p != null) p.close();
+            if (c != null) c.close();
+        } catch (SQLException e) {
+            throw new RuntimeException("Error while closing", e);
+        }
+    }
+
+    private void closeConnections(Connection c, PreparedStatement p, ResultSet set) {
+        try {
+            if (p != null) p.close();
+            if (c != null) c.close();
+            if (set != null) set.close();
+        } catch (SQLException e) {
+            throw new RuntimeException("Error while closing", e);
+        }
+    }
+
     private HashMap<String, Object> getKeySet(T key, List<Field> fields) {
         HashMap<String, Object> result = new HashMap<>();
         for (Field field : fields) {
@@ -202,13 +225,13 @@ public class Implement<T> implements ReflectionJdvcDao<T> {
         List<Object> values = new ArrayList<>();
         boolean isFirst = true;
         for (Map.Entry<String, Object> param : params.entrySet()) {
-            f.append(param.getKey());
-            p.append("?");
             values.add(param.getValue());
             if (!isFirst) {
                 f.append(" , ");
                 p.append(" , ");
             }
+            f.append(param.getKey());
+            p.append("?");
             isFirst = false;
         }
         f.append(" ) ");
@@ -218,32 +241,29 @@ public class Implement<T> implements ReflectionJdvcDao<T> {
                 values);
     }
 
-    private Map.Entry<String, List<Object>> mergeParams(HashMap<String, Object> params) {
+    private Map.Entry<String, List<Object>> mergeParams(HashMap<String, Object> params,String division) {
         StringBuilder result = new StringBuilder();
         List<Object> paramsValue = new ArrayList<>();
         boolean isFirst = true;
         for (Map.Entry<String, Object> p : params.entrySet()) {
             if (!isFirst) {
-                result.append(" and ");
+                result.append(division);
             } else {
                 isFirst = false;
             }
-            result.append(p.getKey() + " = ? ");
+            result.append(p.getKey()).append(" = ? ");
             paramsValue.add(p.getValue());
         }
-        log.info("PARAMS =  " + result.toString());
-        return new HashMap.SimpleEntry<String, List<Object>>(result.toString(), paramsValue);
+        return new HashMap.SimpleEntry<>(result.toString(), paramsValue);
     }
 
-    private T transformSQLtoObject(Class c, ResultSet resultSet) {
-        log.info("HERE");
+
+    private T transformSQLtoObject(ResultSet resultSet) {
         T t;
         try {
             t = (T) targetClass.newInstance();
-        } catch (InstantiationException e) {
-            throw new RuntimeException("Error");
-        } catch (IllegalAccessException e) {
-            throw new RuntimeException("Error");
+        } catch (InstantiationException | IllegalAccessException e) {
+            throw new RuntimeException(e);
         }
 
         try {
@@ -256,7 +276,7 @@ public class Implement<T> implements ReflectionJdvcDao<T> {
                     try {
                         f.set(t, object);
                     } catch (IllegalAccessException e) {
-                        throw new RuntimeException("WTF");
+                        throw new RuntimeException("WTF", e);
                     }
                 }
             } else {
@@ -273,7 +293,7 @@ public class Implement<T> implements ReflectionJdvcDao<T> {
         List<T> result = new ArrayList<>();
         try {
             while (resultSet.next()) {
-                T t = (T) new Object();
+                T t = (T) targetClass.newInstance();
                 List<Field> resultFields = Arrays.asList(t.getClass().getFields());
                 for (Field f : resultFields) {
                     f.setAccessible(true);
@@ -288,7 +308,7 @@ public class Implement<T> implements ReflectionJdvcDao<T> {
                 result.add(t);
             }
             return result;
-        } catch (SQLException e) {
+        } catch (SQLException | InstantiationException | IllegalAccessException e) {
             throw new RuntimeException(e);
         }
     }
