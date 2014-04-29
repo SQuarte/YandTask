@@ -14,20 +14,21 @@ public class Implement<T> implements ReflectionJdvcDao<T> {
 
     private static Logger log = Logger.getLogger(Implement.class.getName());
 
-    private static final String userName = "postgres";
-    private static final String password = "12345678";
-    private static final String URL = "jdbc:postgresql://localhost:5432/postgres";
+
+    private static  String URL ;
     private Class targetClass;
     private List<Field> classFields;
     private String tableName;
     Properties connectionProps = new Properties();
 
-    public Implement(Class targetClass) {
+    public Implement(Class targetClass,String URL, String userName, String password) {
         this.targetClass = targetClass;
+        this.URL = URL;
         connectionProps.put("user", userName);
         connectionProps.put("password", password);
         tableName = getTableName(targetClass);
         classFields = Arrays.asList(targetClass.getFields());
+        if (!checkKeyExist(classFields)) throw new RuntimeException("У класса нет ключевых полей");
     }
 
 
@@ -217,6 +218,14 @@ public class Implement<T> implements ReflectionJdvcDao<T> {
             }
         }
         return result;
+    }
+
+    private boolean checkKeyExist(List<Field> fields){
+        for (Field field : fields) {
+            Annotation a = field.getAnnotation(Key.class);
+            if (a != null) return true;
+        }
+        return false;
     }
 
     private InsertMerged mergeInsertParams(HashMap<String, Object> params) {

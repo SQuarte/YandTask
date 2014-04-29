@@ -4,8 +4,8 @@ import annotations.Table;
 /**
  * Created by SQuartes on 27.04.2014.
  */
-@Table(name = "person")
-public class ExampleEntity {
-    @Key
+
+public class EntityWithoutTable {
+
     public String name;
 }
