@@ -11,6 +11,7 @@ public class TestImpl {
 
     private static Logger log = Logger.getLogger(TestImpl.class.getName());
 
+
     @Test
     public  void test(){
         ExampleEntity a = new ExampleEntity();
